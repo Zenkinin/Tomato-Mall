@@ -1,8 +1,10 @@
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/tomatomall?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    # 端口确认是 3307
+    url: jdbc:mysql://localhost:3307/tomatomall?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: root
-    password: NJUSE2023
+    # 修改密码为 root，与 Docker 保持一致
+    password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     database-platform: org.hibernate.dialect.MySQL8Dialect
@@ -65,5 +67,20 @@ alipay:
   notifyUrl: http://ik6g7c.natappfree.cc/api/orders/notify
   serverUrl: https://openapi-sandbox.dl.alipaydev.com/gateway.do
   returnUrl: http://www.baidu.com
+
+# 粘贴到 application.yml 中
+aliyun:
+  oss:
+    file:
+      endpoint: oss-cn-beijing.aliyuncs.com  # 假地址，格式对就行
+      keyId: fake-access-key-id        # 假账号
+      keySecret: fake-access-key-secret # 假密码
+      bucketName: fake-bucket-name           # 假桶名
+
+management:
+  health:
+    rabbit:
+      enabled: false  # 👈 核心：禁止检查 RabbitMQ 健康状态
+
 server:
   port: 8080

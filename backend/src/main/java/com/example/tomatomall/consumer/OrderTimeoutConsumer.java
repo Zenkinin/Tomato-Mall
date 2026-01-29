@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.io.IOException;
 import com.rabbitmq.client.Channel;
-@Component
+//@Component
 @Slf4j
 public class OrderTimeoutConsumer {
 

@@ -21,71 +21,59 @@ public class JwtInterceptor implements HandlerInterceptor {
     private JwtUtil jwtUtil;
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
-            throws Exception {
-        String path = request.getRequestURI();
-        // 添加payment-success到白名单
-        if (path.contains("/payment-success") || 
-        path.matches("/api/orders/notify")   // 其他白名单路径...
-        ) 
-            return true; // 直接放行，不进行身份验证
-        
-        // 扩展排除规则
-        if (request.getRequestURI().matches("/api/orders/\\d+/pay") || 
-            request.getRequestURI().matches("/api/orders/\\d+/check-payment")) {
-            log.info("支付或检查支付相关路径，允许通过: {}", request.getRequestURI());
-
-                        // 尝试从请求中获取token
-                        String token = extractToken(request);
-                        if (token != null) {
-                            try {
-                                // 从token中提取userId并设置
-                                Integer userId = extractUserIdFromToken(token);
-                                if (userId != null) {
-                                    request.setAttribute("userId", userId);
-                                    log.info("为支付请求设置用户ID: {}", userId);
-                                }
-                            } catch (Exception e) {
-                                log.warn("解析支付请求token失败，继续处理: {}", e.getMessage());
-                            }
-                        }
-                        
-                        // 无论token是否有效都放行
-            return true;
-        }
-        
-        // 放行OPTIONS请求
-        if ("OPTIONS".equals(request.getMethod())) {
-            return true;
-        }
-
-        // 不需要验证的路径
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String uri = request.getRequestURI();
         String method = request.getMethod();
-        // 登录和注册路径不需要验证
 
-        if (("/api/accounts/login".equals(uri))
-                || ("/api/accounts".equals(uri) && "POST".equalsIgnoreCase(method))  // 注册接口
-                || (uri.startsWith("/api/orders/notify"))  //支付宝的回调地址放行
-        )
-        {
+        // 1. 放行 OPTIONS 预检请求 (跨域必备)
+        if ("OPTIONS".equals(method)) {
             return true;
         }
 
-        // 验证Token
+        // 2. 绝对白名单 (完全不需要 Token，甚至不需要解析用户信息)
+        // 包括：支付宝回调、登录、注册
+        if (uri.startsWith("/api/orders/notify") ||
+                "/api/accounts/login".equals(uri) ||
+                ("/api/accounts".equals(uri) && "POST".equalsIgnoreCase(method))) {
+            return true;
+        }
+
+        // 3. 尝试解析 Token (无论是否强制需要，都先解析出来备用)
+        // 统一处理，避免重复代码
         String token = request.getHeader("token");
-        if (token != null && jwtUtil.validateToken(token)) {
-            // 验证通过，将用户名放入请求属性中
-            String username = jwtUtil.extractUsername(token);
-            request.setAttribute("username", username);
+        if (token == null || token.isEmpty()) {
+            // 兼容一下 Authorization: Bearer xxx 格式（可选）
+            String bearer = request.getHeader("Authorization");
+            if (bearer != null && bearer.startsWith("Bearer ")) {
+                token = bearer.substring(7);
+            }
+        }
+
+        boolean isTokenValid = (token != null && jwtUtil.validateToken(token));
+        if (isTokenValid) {
+            // Token 有效，提取用户信息放入 Request
             Integer userId = jwtUtil.getUserIdFromToken(token);
-            // 将用户ID添加到请求属性中
+            String username = jwtUtil.extractUsername(token);
             request.setAttribute("userId", userId);
-            log.info("拦截器在request.setAttribute设置了用户ID: {} 用户名: {}", userId,username);
+            request.setAttribute("username", username);
+            log.info("用户已认证 - ID: {}, Name: {}", userId, username);
+        }
+
+        // 4. 弱校验白名单 (不需要 Token 也能访问，但如果有 Token 更好)
+        // 比如：商品详情页、首页推荐、检查支付状态(视业务而定)
+        if (uri.matches("/api/orders/\\d+/check-payment") ||
+                uri.contains("/payment-success")) {
+            return true; // 放行，Controller 里自己判断 userId 是否为 null
+        }
+
+        // 5. 强校验 (必须有有效 Token 才能通过)
+        // 支付接口(/pay) 应该放在这里，强制要求登录
+        if (isTokenValid) {
             return true;
         }
 
-        // 验证失败，返回401
+        // 6. 验证失败
+        log.warn("拦截未授权访问: {}", uri);
         handleUnauthorized(response);
         return false;
     }

@@ -18,8 +18,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(jwtInterceptor)
                 .addPathPatterns("/api/**")
-                // 这里只写最基础的排除，具体的白名单逻辑建议在 Interceptor 内部判断，维护起来更方便
-                .excludePathPatterns("/api/accounts/login", "/api/accounts/register");
+                // 👇【修改点】把所有绝对白名单都放在这里
+                .excludePathPatterns(
+                        "/api/accounts/login",
+                        "/api/accounts/register",
+                        "/api/orders/notify",        // 支付宝回调
+                        "/api/orders/payment-success" // 支付成功页(如果是纯静态)
+                );
     }
 
     // 2. 配置跨域 (原 CorsConfig 的内容)

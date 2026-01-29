@@ -25,49 +25,31 @@ public class JwtInterceptor implements HandlerInterceptor {
         String uri = request.getRequestURI();
         String method = request.getMethod();
 
-        // 1. 放行 OPTIONS 预检请求 (跨域必备)
+        // 1. 放行 OPTIONS (这个必须留着，因为CORS预检请求可能不会带Token)
         if ("OPTIONS".equals(method)) {
             return true;
         }
 
-        // 2. 绝对白名单 (完全不需要 Token，甚至不需要解析用户信息)
-        // 包括：支付宝回调、登录、注册
-        if (uri.startsWith("/api/orders/notify") ||
-                "/api/accounts/login".equals(uri) ||
-                ("/api/accounts".equals(uri) && "POST".equalsIgnoreCase(method))) {
-            return true;
-        }
+        // 【已删除】第2步绝对白名单逻辑 (因为 WebMvcConfig 已经排除了，请求走不到这)
 
-        // 3. 尝试解析 Token (无论是否强制需要，都先解析出来备用)
-        // 统一处理，避免重复代码
+        // 3. 尝试解析 Token (核心逻辑)
         String token = request.getHeader("token");
-        if (token == null || token.isEmpty()) {
-            // 兼容一下 Authorization: Bearer xxx 格式（可选）
-            String bearer = request.getHeader("Authorization");
-            if (bearer != null && bearer.startsWith("Bearer ")) {
-                token = bearer.substring(7);
-            }
-        }
+        // ... (保持你原有的 Authorization 兼容代码) ...
 
         boolean isTokenValid = (token != null && jwtUtil.validateToken(token));
         if (isTokenValid) {
-            // Token 有效，提取用户信息放入 Request
-            Integer userId = jwtUtil.getUserIdFromToken(token);
-            String username = jwtUtil.extractUsername(token);
-            request.setAttribute("userId", userId);
-            request.setAttribute("username", username);
-            log.info("用户已认证 - ID: {}, Name: {}", userId, username);
+            // ... (保持你原有的解析 UserID 代码) ...
+            // ... request.setAttribute ...
         }
 
-        // 4. 弱校验白名单 (不需要 Token 也能访问，但如果有 Token 更好)
-        // 比如：商品详情页、首页推荐、检查支付状态(视业务而定)
-        if (uri.matches("/api/orders/\\d+/check-payment") ||
-                uri.contains("/payment-success")) {
-            return true; // 放行，Controller 里自己判断 userId 是否为 null
+        // 4. 弱校验白名单 (半白名单)
+        // 这些接口没有在 WebMvcConfig 排除，因为它们“最好有Token，没有也行”
+        // 比如：检查支付状态，或者商品详情页
+        if (uri.matches("/api/orders/\\d+/check-payment")) {
+            return true; // 放行 (如果有Token，上面第3步已经解析了)
         }
 
-        // 5. 强校验 (必须有有效 Token 才能通过)
-        // 支付接口(/pay) 应该放在这里，强制要求登录
+        // 5. 强校验 (剩下的所有接口，必须有 Token)
         if (isTokenValid) {
             return true;
         }

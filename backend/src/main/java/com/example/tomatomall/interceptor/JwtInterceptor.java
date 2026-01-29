@@ -30,16 +30,24 @@ public class JwtInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 【已删除】第2步绝对白名单逻辑 (因为 WebMvcConfig 已经排除了，请求走不到这)
-
         // 3. 尝试解析 Token (核心逻辑)
         String token = request.getHeader("token");
-        // ... (保持你原有的 Authorization 兼容代码) ...
+        if (token == null || token.isEmpty()) {
+            // 兼容一下 Authorization: Bearer xxx 格式（可选）
+            String bearer = request.getHeader("Authorization");
+            if (bearer != null && bearer.startsWith("Bearer ")) {
+                token = bearer.substring(7);
+            }
+        }
 
         boolean isTokenValid = (token != null && jwtUtil.validateToken(token));
         if (isTokenValid) {
-            // ... (保持你原有的解析 UserID 代码) ...
-            // ... request.setAttribute ...
+            // Token 有效，提取用户信息放入 Request
+            Integer userId = jwtUtil.getUserIdFromToken(token);
+            String username = jwtUtil.extractUsername(token);
+            request.setAttribute("userId", userId);
+            request.setAttribute("username", username);
+            log.info("用户已认证 - ID: {}, Name: {}", userId, username);
         }
 
         // 4. 弱校验白名单 (半白名单)

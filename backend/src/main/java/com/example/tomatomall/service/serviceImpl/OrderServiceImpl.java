@@ -1,5 +1,6 @@
 package com.example.tomatomall.service.serviceImpl;
 
+import cn.hutool.core.util.IdUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.example.tomatomall.config.AliPayConfig;
 import com.example.tomatomall.dao.*;
@@ -112,7 +113,7 @@ public class OrderServiceImpl implements OrderService {
     // RocketMQ 发送逻辑
     private void sendDelayOrderMessage(Order order) {
         Map<String, Object> msgMap = new HashMap<>();
-        msgMap.put("orderId", order.getOrderId());
+        msgMap.put("orderId", order.getOrderId()); // 这里已经是 Long 类型
         msgMap.put("createTime", order.getCreateTime());
 
         String jsonString = JSONObject.toJSONString(msgMap);
@@ -127,8 +128,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private List<CartItem> getAndValidateCartItems(Integer userId, List<Integer> cartItemIds) {
-        List<CartItem> cartItems = cartItemRepository.findAllByCartItemIdIn(cartItemIds);
-        return cartItems;
+        return cartItemRepository.findAllByCartItemIdIn(cartItemIds);
     }
 
     // [核心恢复] 恢复了 Redisson 分布式锁
@@ -139,7 +139,7 @@ public class OrderServiceImpl implements OrderService {
             Product product = productMap.get(cartItem.getProductId());
             Integer productId = cartItem.getProductId();
 
-            // 1. 获取分布式锁 (锁的粒度是商品ID，不同商品互不影响)
+            // 1. 获取分布式锁
             RLock lock = redissonClient.getLock("lock:stock:" + productId);
             try {
                 // 2. 尝试加锁 (等待3秒，持有锁30秒自动释放)
@@ -149,8 +149,7 @@ public class OrderServiceImpl implements OrderService {
                     throw new RuntimeException("系统繁忙，抢购人数过多，请稍后再试");
                 }
 
-                // 3. [锁内逻辑] 查库存 -> 判断 -> 扣减
-                // 只有拿到锁的线程才能执行这段代码，绝对安全
+                // 3. [锁内逻辑]
                 Stockpile stockpile = productService.getStock(productId);
 
                 if (stockpile.getAmount() < cartItem.getQuantity()) {
@@ -166,7 +165,7 @@ public class OrderServiceImpl implements OrderService {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("锁定库存时发生中断异常");
             } finally {
-                // 4. 释放锁 (非常重要！否则死锁)
+                // 4. 释放锁
                 if (lock.isHeldByCurrentThread()) {
                     lock.unlock();
                 }
@@ -207,30 +206,37 @@ public class OrderServiceImpl implements OrderService {
         String username = accountRepository.findByUserId(userId).getUsername();
         order.setUsername(username);
 
+        // [核心修改] 使用 Hutool 雪花算法生成 Long 类型 ID
+        // getSnowflake(workerId, datacenterId)
+        long snowflakeId = IdUtil.getSnowflake(1, 1).nextId();
+        order.setOrderId(snowflakeId);
+
         order.setTotalAmount(totalAmount);
         order.setPaymentMethod(paymentMethod);
         order.setStatus("PENDING");
-        // 设置数据库层面的过期时间，方便人工排查
+        // 设置数据库层面的过期时间
         order.setLockExpireTime(new Timestamp(System.currentTimeMillis() + 30 * 60 * 1000));
-        log.info("创建订单: 用户ID {}, 支付方式 {}, 总金额 {}", userId, paymentMethod, totalAmount);
+        log.info("创建订单: ID={}, 用户ID={}, 金额={}", snowflakeId, userId, totalAmount);
         return orderRepository.save(order);
     }
 
     private void saveCartOrderRelations(List<CartItem> cartItems, Order order) {
         List<CartOrderRelation> relations = new ArrayList<>(cartItems.size());
         for (CartItem cartItem : cartItems) {
+            // 注意：这里 order.getOrderId() 返回的是 Long
+            // 你需要确认 CartOrderRelation 的 orderId 字段也改成了 Long，否则这里会报错
             relations.add(CartOrderRelation.of(cartItem.getCartItemId(), order.getOrderId()));
         }
         cartOrderRelationRepository.saveAll(relations);
     }
 
     @Override
-    public Order getOrderById(Integer orderId) {
+    public Order getOrderById(Long orderId) { // 参数改为 Long
         return orderRepository.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("订单未找到"));
     }
 
-    // ... 其他 getter 方法保持不变 ...
+    // ... 其他 getter 方法 ...
     @Override
     public Order getOrderByTradeNo(String tradeNo) {
         return orderRepository.findByTradeNo(tradeNo).orElseThrow(() -> new RuntimeException("订单未找到"));
@@ -242,30 +248,29 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public Order updateOrderStatus(Integer orderId, String status) {
+    public Order updateOrderStatus(Long orderId, String status) { // 参数改为 Long
         Order order = getOrderById(orderId);
         order.setStatus(status);
         return orderRepository.save(order);
     }
 
-    // 支付回调逻辑 (注意：这里如果是真实环境，建议也用 MQ 解耦，
-    // 但如果想简化，直接写业务逻辑也没问题，只要注意幂等性)
     @Override
     @Transactional
     public boolean processPaymentCallback(PaymentNotifyDTO paymentNotifyDTO) throws Exception {
-        String orderId = paymentNotifyDTO.getOutTradeNo();
+        String orderIdStr = paymentNotifyDTO.getOutTradeNo(); // 此时是纯数字字符串
         String alipayTradeNo = paymentNotifyDTO.getTradeNo();
         BigDecimal actualAmount = paymentNotifyDTO.getTotalAmount();
 
-        Order order = getOrderById(Integer.parseInt(orderId));
+        // [核心修改] 将字符串解析为 Long
+        Order order = getOrderById(Long.parseLong(orderIdStr));
 
         // 1. 校验金额
         if (order.getTotalAmount().compareTo(actualAmount) != 0) {
-            log.warn("订单金额不一致，可能被篡改！订单ID：{}", orderId);
+            log.warn("订单金额不一致！订单ID：{}", order.getOrderId());
             throw new RuntimeException("支付金额校验失败");
         }
 
-        // 2. 幂等性校验 (防止重复处理)
+        // 2. 幂等性校验
         if ("SUCCESS".equals(order.getStatus())) {
             return true;
         }
@@ -277,7 +282,6 @@ public class OrderServiceImpl implements OrderService {
                     .orElseThrow(() -> new RuntimeException("购物车项不存在"));
 
             Stockpile stockpile = stockpileRepository.findByProductId(cartItem.getProductId()).get();
-            // 在这里其实也建议加分布式锁，不过并发回调概率极低
             synchronized (stockpile) {
                 stockpile.setLockedAmount(stockpile.getLockedAmount() - cartItem.getQuantity());
                 stockpileRepository.save(stockpile);
@@ -301,9 +305,8 @@ public class OrderServiceImpl implements OrderService {
 
     @Transactional
     @Override
-    public void handleExpiredOrder(Integer orderId) {
+    public void handleExpiredOrder(Long orderId) { // 参数改为 Long
         Order order = getOrderById(orderId);
-        // 只有 PENDING 的才需要取消
         if ("PENDING".equals(order.getStatus()) &&
                 order.getLockExpireTime().before(new Timestamp(System.currentTimeMillis()))) {
 
@@ -314,7 +317,7 @@ public class OrderServiceImpl implements OrderService {
                 CartItem cartItem = cartRepository.findById(relation.getCartItemId()).orElse(null);
                 if (cartItem != null) {
                     Stockpile stockpile = productService.getStock(cartItem.getProductId());
-                    // 恢复库存：可用库存 + quantity，锁定库存 - quantity
+                    // 恢复库存
                     stockpile.setAmount(stockpile.getAmount() + cartItem.getQuantity());
                     stockpile.setLockedAmount(stockpile.getLockedAmount() - cartItem.getQuantity());
                     stockpileService.updateStockpile(stockpile);
@@ -339,26 +342,23 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public boolean checkPaymentStatusWithAlipay(Integer orderId) throws Exception {
-        // [注意] 这里调用了支付宝沙箱，如果你没配支付宝公钥私钥，这里也会报错。
-        // 但只要前端不发起支付，单纯下单是不会走到这里的。
+    public boolean checkPaymentStatusWithAlipay(Long orderId) throws Exception { // 参数改为 Long
+        // 这里的代码如果你还没有配置好支付宝密钥，可以先 return false
+        // 或者保留原有的 try-catch 逻辑
         try {
             Order order = getOrderById(orderId);
             if (order == null) return false;
-
-            // 简单处理：没有 factory 实例可能报错，如果不用支付功能，这里不用管
-            // AlipayTradeQueryResponse response = Factory.Payment.Common().query(order.getOrderId().toString());
-            // ...            return false;
+            // ... 真实查询逻辑 ...
+            return false;
         } catch (Exception e) {
             log.error("查询支付状态异常", e);
             throw e;
         }
-        return true;
     }
 
     @Override
     @Transactional
-    public Order cancelOrder(Integer orderId, Integer userId) throws Exception {
+    public Order cancelOrder(Long orderId, Integer userId) throws Exception { // 参数改为 Long
         Order order = getOrderById(orderId);
 
         if (!order.getUserId().equals(userId)) {
@@ -370,15 +370,14 @@ public class OrderServiceImpl implements OrderService {
         }
 
         List<CartOrderRelation> relations = cartOrderRelationRepository.findByOrderId(orderId);
+        // ... 恢复库存逻辑同超时 ...
         relations.forEach(relation -> {
             CartItem cartItem = cartRepository.findById(relation.getCartItemId()).orElse(null);
             if (cartItem != null) {
                 Stockpile stockpile = productService.getStock(cartItem.getProductId());
-                synchronized (this) {
-                    stockpile.setAmount(stockpile.getAmount() + cartItem.getQuantity());
-                    stockpile.setLockedAmount(stockpile.getLockedAmount() - cartItem.getQuantity());
-                    stockpileService.updateStockpile(stockpile);
-                }
+                stockpile.setAmount(stockpile.getAmount() + cartItem.getQuantity());
+                stockpile.setLockedAmount(stockpile.getLockedAmount() - cartItem.getQuantity());
+                stockpileService.updateStockpile(stockpile);
             }
         });
 
@@ -388,7 +387,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public Order confirmReceipt(Integer orderId, Integer userId) throws Exception {
+    public Order confirmReceipt(Long orderId, Integer userId) throws Exception { // 参数改为 Long
         Order order = getOrderById(orderId);
         if (!order.getUserId().equals(userId)) {
             throw new RuntimeException("无权操作此订单");

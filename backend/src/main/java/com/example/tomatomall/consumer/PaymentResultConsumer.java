@@ -28,7 +28,7 @@ public class PaymentResultConsumer implements RocketMQListener<PaymentNotifyDTO>
         try {
             // 1. 查询订单
             // 注意：这里可能会抛出异常(订单不存在)，如果抛出，RocketMQ会重试
-            Order order = orderService.getOrderById(Integer.parseInt(notifyDTO.getOutTradeNo()));
+            Order order = orderService.getOrderById(Long.parseLong(notifyDTO.getOutTradeNo()));
             log.info("查询到订单信息: ID={} 金额={}", order.getOrderId(), order.getTotalAmount());
 
             // 2. 幂等性检查

@@ -30,7 +30,7 @@ public class OrderTimeoutConsumer implements RocketMQListener<String> {
         try {
             // 1. 解析消息
             Map<String, Object> map = JSONObject.parseObject(message, Map.class);
-            Integer orderId = (Integer) map.get("orderId");
+            Long orderId = (Long) map.get("orderId");
 
             log.info("【RocketMQ】收到订单超时检查消息，订单ID：{}", orderId);
 

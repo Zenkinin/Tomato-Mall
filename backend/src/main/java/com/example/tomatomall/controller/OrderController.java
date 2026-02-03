@@ -7,14 +7,10 @@ import com.example.tomatomall.dto.PaymentNotifyDTO;
 import com.example.tomatomall.po.AliPay;
 import com.example.tomatomall.po.Order;
 import com.example.tomatomall.service.OrderService;
-// 在其他import语句后添加:
 import com.example.tomatomall.util.JwtTokenUtil;
 import com.example.tomatomall.vo.Response;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageDeliveryMode;
-import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,7 +60,7 @@ public class OrderController {
     private OrderService orderService;
 
     @Autowired
-    private RabbitTemplate rabbitTemplate;
+    private RocketMQTemplate rocketMQTemplate;
 
     @PostMapping("/{orderId}/pay")
     public void pay(@PathVariable Integer orderId, 
@@ -203,49 +199,11 @@ public class OrderController {
         notifyDTO.setTradeNo(params.get("trade_no"));
         notifyDTO.setTotalAmount(new BigDecimal(params.get("total_amount")));
 
-        MessageProperties messageProperties = new MessageProperties();
-        messageProperties.setDeliveryMode(MessageDeliveryMode.PERSISTENT);  // 设为持久化
-        /*
-        消息持久化的执行流程
-下面是当你发送一条持久化消息时，RabbitMQ 的内部执行流程：
+        // 【修改点】使用 RocketMQ 发送消息
+        // topic: "payment-success-topic" (必须和Consumer监听的一致)
+        rocketMQTemplate.convertAndSend("payment-success-topic", notifyDTO);
 
-1. 生产者发送消息（设置了 deliveryMode = PERSISTENT）
-RabbitTemplate 会将消息封装成一个 Message 对象。
-
-在 MessageProperties 中添加 deliveryMode = PERSISTENT。
-
-MessageProperties props = new MessageProperties();
-props.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-Message msg = new Message(bytes, props);
-2. RabbitMQ 接收到消息后判断：
-当前消息是否为 PERSISTENT；
-
-当前队列是否 durable；
-
-当前消息是否被确认成功持久化到磁盘（WAL）。
-
-3. 写入磁盘（WAL 日志 + Mnesia 存储）
-RabbitMQ 并不会马上将消息写入队列文件，而是先写入一个称为 Write-Ahead Log (WAL) 的日志结构。
-
-RabbitMQ 使用 Erlang 自带的 Mnesia 数据库 存储元信息，如队列结构、交换机、绑定等。
-
-4. flush 到磁盘
-RabbitMQ 通过一定策略（时间、批次、内存阈值等）将 WAL 中的消息同步 flush 到磁盘中的队列文件中，以此保障消息可靠性。
-         */
-
-        Message message = rabbitTemplate.getMessageConverter().toMessage(
-                notifyDTO,
-                messageProperties
-        );
-
-        rabbitTemplate.send(
-                "payment.exchange",
-                "payment.process",
-                message
-        );
-
-        log.info("rabbitmq发送消息成功convertAndSend params（实际上是PaymentNotifyDTO）: {}", params);
-
+        log.info("RocketMQ 消息发送成功: {}", notifyDTO);
 
         response.getWriter().print("success");
     }

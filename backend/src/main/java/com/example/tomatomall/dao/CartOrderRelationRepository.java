@@ -8,5 +8,5 @@ import java.util.List;
 
 @Repository
 public interface CartOrderRelationRepository extends JpaRepository<CartOrderRelation, Integer> {
-    List<CartOrderRelation> findByOrderId(Integer orderId);
+    List<CartOrderRelation> findByOrderId(Long orderId);
 }

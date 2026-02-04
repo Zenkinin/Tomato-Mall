@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface OrderRepository extends JpaRepository<Order, Integer> {
+public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Order> findByUserId(Integer userId); // 根据用户ID查找订单
 
     Optional<Order> findByTradeNo(String tradeNo);

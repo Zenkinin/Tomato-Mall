@@ -32,11 +32,7 @@ public class SecurityConfig extends WebSecurityConfigurerAdapter {
                 .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 .and()
                 .authorizeRequests()
-                .antMatchers("/api/orders/*/pay").permitAll()  // 支付相关端点允许公开访问
                 .antMatchers("/**").permitAll()  // 所有请求交由JwtInterceptor处理
-                // 添加payment-success为公开访问
-                .antMatchers("/api/orders/payment-success").permitAll()
-                .antMatchers("/api/orders/notify").permitAll()
                 .and()
                 .formLogin().disable()
                 .httpBasic().disable();

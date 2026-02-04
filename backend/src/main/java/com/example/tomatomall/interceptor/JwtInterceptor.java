@@ -21,71 +21,49 @@ public class JwtInterceptor implements HandlerInterceptor {
     private JwtUtil jwtUtil;
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
-            throws Exception {
-        String path = request.getRequestURI();
-        // 添加payment-success到白名单
-        if (path.contains("/payment-success") || 
-        path.matches("/api/orders/notify")   // 其他白名单路径...
-        ) 
-            return true; // 直接放行，不进行身份验证
-        
-        // 扩展排除规则
-        if (request.getRequestURI().matches("/api/orders/\\d+/pay") || 
-            request.getRequestURI().matches("/api/orders/\\d+/check-payment")) {
-            log.info("支付或检查支付相关路径，允许通过: {}", request.getRequestURI());
-
-                        // 尝试从请求中获取token
-                        String token = extractToken(request);
-                        if (token != null) {
-                            try {
-                                // 从token中提取userId并设置
-                                Integer userId = extractUserIdFromToken(token);
-                                if (userId != null) {
-                                    request.setAttribute("userId", userId);
-                                    log.info("为支付请求设置用户ID: {}", userId);
-                                }
-                            } catch (Exception e) {
-                                log.warn("解析支付请求token失败，继续处理: {}", e.getMessage());
-                            }
-                        }
-                        
-                        // 无论token是否有效都放行
-            return true;
-        }
-        
-        // 放行OPTIONS请求
-        if ("OPTIONS".equals(request.getMethod())) {
-            return true;
-        }
-
-        // 不需要验证的路径
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String uri = request.getRequestURI();
         String method = request.getMethod();
-        // 登录和注册路径不需要验证
 
-        if (("/api/accounts/login".equals(uri))
-                || ("/api/accounts".equals(uri) && "POST".equalsIgnoreCase(method))  // 注册接口
-                || (uri.startsWith("/api/orders/notify"))  //支付宝的回调地址放行
-        )
-        {
+        // 1. 放行 OPTIONS (这个必须留着，因为CORS预检请求可能不会带Token)
+        if ("OPTIONS".equals(method)) {
             return true;
         }
 
-        // 验证Token
+        // 3. 尝试解析 Token (核心逻辑)
         String token = request.getHeader("token");
-        if (token != null && jwtUtil.validateToken(token)) {
-            // 验证通过，将用户名放入请求属性中
-            String username = jwtUtil.extractUsername(token);
-            request.setAttribute("username", username);
+        if (token == null || token.isEmpty()) {
+            // 兼容一下 Authorization: Bearer xxx 格式（可选）
+            String bearer = request.getHeader("Authorization");
+            if (bearer != null && bearer.startsWith("Bearer ")) {
+                token = bearer.substring(7);
+            }
+        }
+
+        boolean isTokenValid = (token != null && jwtUtil.validateToken(token));
+        if (isTokenValid) {
+            // Token 有效，提取用户信息放入 Request
             Integer userId = jwtUtil.getUserIdFromToken(token);
-            // 将用户ID添加到请求属性中
+            String username = jwtUtil.extractUsername(token);
             request.setAttribute("userId", userId);
-            log.info("拦截器在request.setAttribute设置了用户ID: {} 用户名: {}", userId,username);
+            request.setAttribute("username", username);
+            log.info("用户已认证 - ID: {}, Name: {}", userId, username);
+        }
+
+        // 4. 弱校验白名单 (半白名单)
+        // 这些接口没有在 WebMvcConfig 排除，因为它们“最好有Token，没有也行”
+        // 比如：检查支付状态，或者商品详情页
+        if (uri.matches("/api/orders/\\d+/check-payment")) {
+            return true; // 放行 (如果有Token，上面第3步已经解析了)
+        }
+
+        // 5. 强校验 (剩下的所有接口，必须有 Token)
+        if (isTokenValid) {
             return true;
         }
 
-        // 验证失败，返回401
+        // 6. 验证失败
+        log.warn("拦截未授权访问: {}", uri);
         handleUnauthorized(response);
         return false;
     }

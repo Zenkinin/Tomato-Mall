@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -292,10 +293,16 @@ public class CommentServiceImpl implements CommentService {
         dto.setContent(comment.getContent());
         dto.setRating(comment.getRating());
 
+        // 如果 getImages() 可能为 null，记得加判空
         if (comment.getImages() != null && !comment.getImages().isEmpty()) {
-            dto.setImages(List.of(comment.getImages().split(",")));
+            String[] imgs = comment.getImages().split(",");
+
+            // 【修改点】用 Arrays.asList 替代 List.of
+            List<String> imageList = Arrays.asList(imgs);
+
+            dto.setImages(imageList);
         } else {
-            dto.setImages(new ArrayList<>());
+            dto.setImages(new ArrayList<>()); // 或者 Collections.emptyList()
         }
 
         dto.setCreateTime(comment.getCreateTime());

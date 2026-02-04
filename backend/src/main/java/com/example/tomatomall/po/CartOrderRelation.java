@@ -18,10 +18,10 @@ public class CartOrderRelation {
     private Integer cartItemId;
 
     @Column(name = "order_id")
-    private Integer orderId;
+    private Long orderId;
 
     // Added by cz on 4.9 at 11:12
-    public static CartOrderRelation of(Integer cartItemId, Integer orderId) {
+    public static CartOrderRelation of(Integer cartItemId, Long orderId) {
         CartOrderRelation relation = new CartOrderRelation();
         relation.setCartItemId(cartItemId);
         relation.setOrderId(orderId);

@@ -4,23 +4,17 @@ import com.alibaba.fastjson.JSONObject;
 import com.alipay.easysdk.factory.Factory;
 import com.example.tomatomall.config.AliPayConfig;
 import com.example.tomatomall.dto.PaymentNotifyDTO;
-import com.example.tomatomall.po.AliPay;
 import com.example.tomatomall.po.Order;
 import com.example.tomatomall.service.OrderService;
-// 在其他import语句后添加:
 import com.example.tomatomall.util.JwtTokenUtil;
 import com.example.tomatomall.vo.Response;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageDeliveryMode;
-import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import com.alipay.api.AlipayApiException;
 import com.alipay.api.AlipayClient;
 import com.alipay.api.DefaultAlipayClient;
 import com.alipay.api.request.AlipayTradePagePayRequest;
@@ -31,13 +25,11 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.ArrayList;
-import java.util.Date;
-import java.sql.Timestamp;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -56,119 +48,144 @@ public class OrderController {
     private static final String CHARSET ="utf-8";
     private static final String SIGN_TYPE ="RSA2";
 
-    // 在类的顶部添加依赖注入
     @Autowired
-    private JwtTokenUtil jwtTokenUtil; // 添加此行
+    private JwtTokenUtil jwtTokenUtil;
 
     @Autowired
     private OrderService orderService;
 
     @Autowired
-    private RabbitTemplate rabbitTemplate;
+    private RocketMQTemplate rocketMQTemplate;
 
+//    // [修改点] PathVariable 类型改为 Long
+//    @PostMapping("/{orderId}/pay")
+//    public void pay(@PathVariable Long orderId,
+//                    @RequestParam(value = "token", required = false) String tokenParam,
+//                    @RequestParam(value = "authorization", required = false) String authParam,
+//                    HttpServletRequest request,
+//                    HttpServletResponse response) throws Exception {
+//
+//        // --- 1. 认证逻辑保持不变 ---
+//        String token = null;
+//        String authHeader = request.getHeader("Authorization");
+//        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+//            token = authHeader.substring(7);
+//        } else if (authParam != null && authParam.startsWith("Bearer ")) {
+//            token = authParam.substring(7);
+//        } else if (tokenParam != null) {
+//            token = tokenParam;
+//        }
+//
+//        if (token != null) {
+//            try {
+//                Integer userId = jwtTokenUtil.getUserIdFromToken(token);
+//                request.setAttribute("userId", userId);
+//            } catch (Exception e) {
+//                log.error("token验证失败", e);
+//                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+//                response.getWriter().write("认证失败");
+//                return;
+//            }
+//        } else {
+//            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+//            return;
+//        }
+//
+//        // --- 2. 业务逻辑 ---
+//
+//        // [修改点] getOrderById 参数已在 Service 接口变更为 Long
+//        Order order = orderService.getOrderById(orderId);
+//
+//        log.info("支付订单信息: ID={}, 状态={}, 创建时间={}", order.getOrderId(), order.getStatus(), order.getCreateTime());
+//
+//        if (order.getLockExpireTime().before(new Date())) {
+//            throw new RuntimeException("订单已过期，请重新下单");
+//        }
+//
+//        AlipayClient alipayClient = new DefaultAlipayClient(
+//                GATEWAY_URL,
+//                aliPayConfig.getAppId(),
+//                aliPayConfig.getAppPrivateKey(),
+//                FORMAT,
+//                CHARSET,
+//                aliPayConfig.getAlipayPublicKey(),
+//                SIGN_TYPE);
+//
+//        String returnUrlWithToken = "http://localhost:8080/api/orders/payment-success?orderId=" + orderId;
+//        if (token != null) {
+//            returnUrlWithToken += "&token=" + token;
+//        }
+//
+//        AlipayTradePagePayRequest alipayRequest = new AlipayTradePagePayRequest();
+//        alipayRequest.setNotifyUrl(aliPayConfig.getNotifyUrl());
+//        alipayRequest.setReturnUrl(returnUrlWithToken);
+//
+//        JSONObject bizContent = new JSONObject();
+//
+//        // [修改点] 既然使用了雪花算法(Long)，ID本身就是全局唯一的，不需要再拼接时间戳了！
+//        // 直接转成字符串传给支付宝
+//        bizContent.put("out_trade_no", order.getOrderId().toString());
+//
+//        bizContent.put("total_amount", order.getTotalAmount());
+//        bizContent.put("subject", "Tomato Mall Order #" + orderId);
+//        bizContent.put("product_code", "FAST_INSTANT_TRADE_PAY");
+//        alipayRequest.setBizContent(bizContent.toString());
+//
+//        String form = alipayClient.pageExecute(alipayRequest).getBody();
+//
+//        response.setContentType("text/html;charset=" + CHARSET);
+//        response.getWriter().write(form);
+//        response.getWriter().flush();
+//        response.getWriter().close();
+//    }
+
+    //简化支付逻辑
+    // [核心修改] 模拟支付接口：直接修改订单状态
     @PostMapping("/{orderId}/pay")
-    public void pay(@PathVariable Integer orderId, 
-                    @RequestParam(value = "token", required = false) String tokenParam,
-                    @RequestParam(value = "authorization", required = false) String authParam,
-                    HttpServletRequest request,
-                    HttpServletResponse response) throws Exception {
-        
-        // 尝试获取认证信息(多种方式)
-        String token = null;
-        
-        // 1. 从请求头获取
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-        }
-        // 2. 从表单authorization参数获取
-        else if (authParam != null && authParam.startsWith("Bearer ")) {
-            token = authParam.substring(7);
-        }
-        // 3. 从表单token参数获取
-        else if (tokenParam != null) {
-            token = tokenParam;
-        }
-        
-        // 验证token并设置用户身份
-        if (token != null) {
-            try {
-                Integer userId = jwtTokenUtil.getUserIdFromToken(token);
-                request.setAttribute("userId", userId);
-                log.info("从表单参数获取用户认证信息成功, userId: {}", userId);
-            } catch (Exception e) {
-                log.error("token验证失败", e);
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("认证失败");
-                return;
+    public Response<String> pay(@PathVariable Long orderId,
+                                @RequestAttribute("userId") Integer userId) {
+        try {
+            // 1. 验证订单归属
+            Order order = orderService.getOrderById(orderId);
+            if (order == null) {
+                return Response.buildFailure("订单不存在", "404");
             }
-        } else {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.getWriter().write("未提供有效的认证信息");
-            return;
+            if (!order.getUserId().equals(userId)) {
+                return Response.buildFailure("无权操作此订单", "403");
+            }
+
+            // 2. 验证状态
+            if (!"PENDING".equals(order.getStatus())) {
+                return Response.buildFailure("订单状态已更新，请勿重复支付", "400");
+            }
+
+            // 3. 检查过期
+            if (order.getLockExpireTime().before(new Date())) {
+                return Response.buildFailure("订单已过期，无法支付", "400");
+            }
+
+            // 4. [模拟支付成功] 修改状态
+            order.setStatus("PAID");
+            order.setPaymentTime(new Timestamp(System.currentTimeMillis()));
+            // 模拟一个流水号
+            order.setTradeNo("MOCK_" + System.currentTimeMillis());
+
+            orderService.updateOrder(order);
+
+            // 5. (可选) 如果你想测试 RocketMQ 的发货流程，可以在这里发一条消息
+            // PaymentNotifyDTO notify = new PaymentNotifyDTO();
+            // notify.setOutTradeNo(String.valueOf(orderId));
+            // notify.setTotalAmount(order.getTotalAmount());
+            // rocketMQTemplate.convertAndSend("payment-success-topic", notify);
+
+            log.info("模拟支付成功，订单ID: {}", orderId);
+            return Response.buildSuccess("支付成功");
+
+        } catch (Exception e) {
+            log.error("模拟支付失败", e);
+            return Response.buildFailure("系统错误", "500");
         }
-        
-        // 继续处理支付逻辑...
-        Order order = orderService.getOrderById(orderId);
-        
-        // 添加详细调试日志
-        log.info("支付订单信息: ID={}, 状态={}, 创建时间={}, 锁定过期时间={}, 当前时间={}",
-                 order.getOrderId(), 
-                 order.getStatus(), 
-                 order.getCreateTime(),
-                 order.getLockExpireTime(), 
-                 new Date());
-        
-        // 检查是否已过期并记录结果
-        boolean isExpired = order.getLockExpireTime().before(new Date());
-        log.info("订单是否已过期: {}", isExpired);
-        
-        if (isExpired) {
-            throw new RuntimeException("订单已过期，请重新下单");
-
-        }
-
-        AlipayClient alipayClient = new DefaultAlipayClient(
-                GATEWAY_URL,
-                aliPayConfig.getAppId(),
-                aliPayConfig.getAppPrivateKey(),
-                FORMAT,
-                CHARSET,
-                aliPayConfig.getAlipayPublicKey(),
-                SIGN_TYPE);
-
-
-        // 将这段代码修改为使用自动关闭URL
-        String returnUrlWithToken = "http://localhost:8080/api/orders/payment-success?orderId=" + orderId;
-        if (token != null) {
-            returnUrlWithToken += "&token=" + token;
-        }     
-              
-        AlipayTradePagePayRequest alipayRequest = new AlipayTradePagePayRequest();
-        alipayRequest.setNotifyUrl(aliPayConfig.getNotifyUrl());
-        log.info("支付宝支付回调地址: {}", aliPayConfig.getNotifyUrl());
-        alipayRequest.setReturnUrl(returnUrlWithToken);//前端返回地址
-        log.info("支付宝支付返回地址(+token): {}", returnUrlWithToken);
-
-        JSONObject bizContent = new JSONObject();
-        bizContent.put("out_trade_no", order.getOrderId());
-        bizContent.put("total_amount", order.getTotalAmount());
-        bizContent.put("subject", "Tomato Mall Order #" + orderId);
-        bizContent.put("product_code", "FAST_INSTANT_TRADE_PAY");
-        alipayRequest.setBizContent(bizContent.toString());
-        log.info(bizContent.toString());
-
-        String form = alipayClient.pageExecute(alipayRequest).getBody();
-
-        response.setContentType("text/html;charset=" + CHARSET);
-        response.getWriter().write(form);
-        response.getWriter().flush();
-        response.getWriter().close();
-        log.info("支付请求已发送，订单ID: {}", orderId);
-        log.info("支付请求表单: {}", form);
     }
-
-    
 
     @PostMapping("/notify")
     public void payNotify(HttpServletRequest request, HttpServletResponse response) throws Exception {
@@ -176,185 +193,115 @@ public class OrderController {
 
         Map<String, String> params = new HashMap<>();
         request.getParameterMap().forEach((k, v) -> params.put(k, v[0]));
-        log.info("接收到回调参数: {}", params);
-        log.info("开始进行签名验证");
-        boolean verifyResult = Factory.Payment.Common().verifyNotify(params);
-        log.info("签名验证结果: {}", verifyResult);
 
+        boolean verifyResult = Factory.Payment.Common().verifyNotify(params);
         if (!verifyResult) {
-            log.info("签名验证失败，返回fail");
+            log.warn("签名验证失败");
             response.getWriter().print("fail");
             return;
         }
 
         String tradeStatus = params.get("trade_status");
-        log.info("交易状态: {}", tradeStatus);
-
         if (!"TRADE_SUCCESS".equals(tradeStatus) && !"TRADE_FINISHED".equals(tradeStatus)) {
-            log.info("交易状态不是成功或完成状态，直接返回success");
             response.getWriter().print("success");
             return;
         }
 
-        // 使用类型安全的传输对象代替原始Map modified by cz on 4.11 at 10:35
-        // 并添加消息持久化 at 4.14 17：24
         PaymentNotifyDTO notifyDTO = new PaymentNotifyDTO();
+
+        // [修改点] 直接获取 out_trade_no，不需要再进行字符串截取了
+        // 因为我们在 pay 接口里传的就是纯粹的 orderId
         notifyDTO.setOutTradeNo(params.get("out_trade_no"));
+
         notifyDTO.setTradeNo(params.get("trade_no"));
         notifyDTO.setTotalAmount(new BigDecimal(params.get("total_amount")));
 
-        MessageProperties messageProperties = new MessageProperties();
-        messageProperties.setDeliveryMode(MessageDeliveryMode.PERSISTENT);  // 设为持久化
-        /*
-        消息持久化的执行流程
-下面是当你发送一条持久化消息时，RabbitMQ 的内部执行流程：
-
-1. 生产者发送消息（设置了 deliveryMode = PERSISTENT）
-RabbitTemplate 会将消息封装成一个 Message 对象。
-
-在 MessageProperties 中添加 deliveryMode = PERSISTENT。
-
-MessageProperties props = new MessageProperties();
-props.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-Message msg = new Message(bytes, props);
-2. RabbitMQ 接收到消息后判断：
-当前消息是否为 PERSISTENT；
-
-当前队列是否 durable；
-
-当前消息是否被确认成功持久化到磁盘（WAL）。
-
-3. 写入磁盘（WAL 日志 + Mnesia 存储）
-RabbitMQ 并不会马上将消息写入队列文件，而是先写入一个称为 Write-Ahead Log (WAL) 的日志结构。
-
-RabbitMQ 使用 Erlang 自带的 Mnesia 数据库 存储元信息，如队列结构、交换机、绑定等。
-
-4. flush 到磁盘
-RabbitMQ 通过一定策略（时间、批次、内存阈值等）将 WAL 中的消息同步 flush 到磁盘中的队列文件中，以此保障消息可靠性。
-         */
-
-        Message message = rabbitTemplate.getMessageConverter().toMessage(
-                notifyDTO,
-                messageProperties
-        );
-
-        rabbitTemplate.send(
-                "payment.exchange",
-                "payment.process",
-                message
-        );
-
-        log.info("rabbitmq发送消息成功convertAndSend params（实际上是PaymentNotifyDTO）: {}", params);
-
+        // 发送 RocketMQ 消息
+        rocketMQTemplate.convertAndSend("payment-success-topic", notifyDTO);
+        log.info("RocketMQ 消息发送成功: {}", notifyDTO);
 
         response.getWriter().print("success");
     }
 
+    // [修改点] PathVariable 改为 Long
     @GetMapping("/{orderId}/status")
-    public Response<Order> checkOrderStatus(@PathVariable Integer orderId) {
+    public Response<Order> checkOrderStatus(@PathVariable Long orderId) {
         return Response.buildSuccess(orderService.getOrderById(orderId));
     }
 
-
-    
-    /**
-     * 获取当前用户的订单列表
-     */
     @GetMapping
     public Response<List<Order>> getUserOrders(@RequestAttribute("userId") Integer userId) {
         try {
             List<Order> orders = orderService.getOrdersByUserId(userId);
             return Response.buildSuccess(orders);
         } catch (Exception e) {
-            log.error("获取用户订单失败: {}", e.getMessage(), e);
-            return Response.buildFailure("获取订单列表失败: " + e.getMessage(), "500");
+            return Response.buildFailure("获取订单列表失败", "500");
         }
     }
 
-    /**
-     * 取消订单
-     */
+    // [修改点] PathVariable 改为 Long
     @PostMapping("/{orderId}/cancel")
     public Response<Order> cancelOrder(
-            @PathVariable Integer orderId,
+            @PathVariable Long orderId,
             @RequestAttribute("userId") Integer userId) {
         try {
             Order cancelledOrder = orderService.cancelOrder(orderId, userId);
             return Response.buildSuccess(cancelledOrder);
-        } catch (RuntimeException e) {
-            log.warn("取消订单失败: {}", e.getMessage());
-            return Response.buildFailure(e.getMessage(), "400");
         } catch (Exception e) {
-            log.error("取消订单发生异常: {}", e.getMessage(), e);
-            return Response.buildFailure("系统错误，取消订单失败", "500");
+            return Response.buildFailure(e.getMessage(), "400");
         }
     }
 
-    /**
-     * 确认收货
-     */
+    // [修改点] PathVariable 改为 Long
     @PostMapping("/{orderId}/confirm")
     public Response<Order> confirmReceipt(
-            @PathVariable Integer orderId,
+            @PathVariable Long orderId,
             @RequestAttribute("userId") Integer userId) {
         try {
             Order confirmedOrder = orderService.confirmReceipt(orderId, userId);
             return Response.buildSuccess(confirmedOrder);
-        } catch (RuntimeException e) {
-            log.warn("确认收货失败: {}", e.getMessage());
-            return Response.buildFailure(e.getMessage(), "400");
         } catch (Exception e) {
-            log.error("确认收货发生异常: {}", e.getMessage(), e);
-            return Response.buildFailure("系统错误，确认收货失败", "500");
+            return Response.buildFailure(e.getMessage(), "400");
         }
     }
 
-    
+    // [修改点] PathVariable 改为 Long
     @PostMapping("/{orderId}/check-payment")
     public Response<Order> checkPaymentManually(
-            @PathVariable Integer orderId,
+            @PathVariable Long orderId,
             @RequestAttribute(value = "userId", required = false) Integer userId) {
-        
         try {
-            // 获取订单
             Order order = orderService.getOrderById(orderId);
-            if (order == null) {
-                return Response.buildFailure("订单不存在", "404");
-            }
-            
-            // 如果有userId则验证权限，没有则略过权限检查
+            if (order == null) return Response.buildFailure("订单不存在", "404");
+
+            // 权限检查
             if (userId != null && !order.getUserId().equals(userId)) {
-                return Response.buildFailure("无权访问此订单", "403");
+                return Response.buildFailure("无权访问", "403");
             }
-            
-            // 已支付订单无需检查
+
             if (!"PENDING".equals(order.getStatus())) {
                 return Response.buildSuccess(order);
             }
-            
-            // 调用支付宝查询接口检查支付状态
+
+            // 主动查询支付宝
             boolean isPaid = orderService.checkPaymentStatusWithAlipay(orderId);
-            
             if (isPaid) {
-                // 更新订单状态
                 order.setStatus("PAID");
                 order.setPaymentTime(new Timestamp(new Date().getTime()));
                 order = orderService.updateOrder(order);
-                log.info("手动检查订单支付状态：已支付 orderId={}", orderId);
             }
-            
             return Response.buildSuccess(order);
         } catch (Exception e) {
-            log.error("检查支付状态失败: {}", e.getMessage(), e);
-            return Response.buildFailure("检查支付状态失败: " + e.getMessage(), "500");
+            log.error("检查支付状态失败", e);
+            return Response.buildFailure("系统错误", "500");
         }
     }
-    
+
     // 添加支付成功后的自动关闭页面
     @GetMapping("/payment-success")
     public void paymentSuccess(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String orderId = request.getParameter("orderId");
-        
+
         // 输出自动关闭页面
         response.setContentType("text/html;charset=utf-8");
         PrintWriter writer = response.getWriter();

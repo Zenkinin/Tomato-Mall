@@ -7,13 +7,17 @@ import javax.persistence.*;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
+import cn.hutool.core.util.IdUtil;
+
 @Entity
 @Data
 @Table(name = "orders")
 public class Order {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Integer orderId; // 订单ID
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long orderId; // Integer -> Long
 
     @Column(nullable = false)
     private Integer userId; // 用户ID

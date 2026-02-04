@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "mitt": "^3.0.1"
+    "mitt": "^3.0.1",
+    "pymysql": "^1.0.0"
   }
 }

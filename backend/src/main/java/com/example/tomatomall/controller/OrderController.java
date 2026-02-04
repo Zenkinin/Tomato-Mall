@@ -57,86 +57,134 @@ public class OrderController {
     @Autowired
     private RocketMQTemplate rocketMQTemplate;
 
-    // [修改点] PathVariable 类型改为 Long
+//    // [修改点] PathVariable 类型改为 Long
+//    @PostMapping("/{orderId}/pay")
+//    public void pay(@PathVariable Long orderId,
+//                    @RequestParam(value = "token", required = false) String tokenParam,
+//                    @RequestParam(value = "authorization", required = false) String authParam,
+//                    HttpServletRequest request,
+//                    HttpServletResponse response) throws Exception {
+//
+//        // --- 1. 认证逻辑保持不变 ---
+//        String token = null;
+//        String authHeader = request.getHeader("Authorization");
+//        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+//            token = authHeader.substring(7);
+//        } else if (authParam != null && authParam.startsWith("Bearer ")) {
+//            token = authParam.substring(7);
+//        } else if (tokenParam != null) {
+//            token = tokenParam;
+//        }
+//
+//        if (token != null) {
+//            try {
+//                Integer userId = jwtTokenUtil.getUserIdFromToken(token);
+//                request.setAttribute("userId", userId);
+//            } catch (Exception e) {
+//                log.error("token验证失败", e);
+//                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+//                response.getWriter().write("认证失败");
+//                return;
+//            }
+//        } else {
+//            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+//            return;
+//        }
+//
+//        // --- 2. 业务逻辑 ---
+//
+//        // [修改点] getOrderById 参数已在 Service 接口变更为 Long
+//        Order order = orderService.getOrderById(orderId);
+//
+//        log.info("支付订单信息: ID={}, 状态={}, 创建时间={}", order.getOrderId(), order.getStatus(), order.getCreateTime());
+//
+//        if (order.getLockExpireTime().before(new Date())) {
+//            throw new RuntimeException("订单已过期，请重新下单");
+//        }
+//
+//        AlipayClient alipayClient = new DefaultAlipayClient(
+//                GATEWAY_URL,
+//                aliPayConfig.getAppId(),
+//                aliPayConfig.getAppPrivateKey(),
+//                FORMAT,
+//                CHARSET,
+//                aliPayConfig.getAlipayPublicKey(),
+//                SIGN_TYPE);
+//
+//        String returnUrlWithToken = "http://localhost:8080/api/orders/payment-success?orderId=" + orderId;
+//        if (token != null) {
+//            returnUrlWithToken += "&token=" + token;
+//        }
+//
+//        AlipayTradePagePayRequest alipayRequest = new AlipayTradePagePayRequest();
+//        alipayRequest.setNotifyUrl(aliPayConfig.getNotifyUrl());
+//        alipayRequest.setReturnUrl(returnUrlWithToken);
+//
+//        JSONObject bizContent = new JSONObject();
+//
+//        // [修改点] 既然使用了雪花算法(Long)，ID本身就是全局唯一的，不需要再拼接时间戳了！
+//        // 直接转成字符串传给支付宝
+//        bizContent.put("out_trade_no", order.getOrderId().toString());
+//
+//        bizContent.put("total_amount", order.getTotalAmount());
+//        bizContent.put("subject", "Tomato Mall Order #" + orderId);
+//        bizContent.put("product_code", "FAST_INSTANT_TRADE_PAY");
+//        alipayRequest.setBizContent(bizContent.toString());
+//
+//        String form = alipayClient.pageExecute(alipayRequest).getBody();
+//
+//        response.setContentType("text/html;charset=" + CHARSET);
+//        response.getWriter().write(form);
+//        response.getWriter().flush();
+//        response.getWriter().close();
+//    }
+
+    //简化支付逻辑
+    // [核心修改] 模拟支付接口：直接修改订单状态
     @PostMapping("/{orderId}/pay")
-    public void pay(@PathVariable Long orderId,
-                    @RequestParam(value = "token", required = false) String tokenParam,
-                    @RequestParam(value = "authorization", required = false) String authParam,
-                    HttpServletRequest request,
-                    HttpServletResponse response) throws Exception {
-
-        // --- 1. 认证逻辑保持不变 ---
-        String token = null;
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-        } else if (authParam != null && authParam.startsWith("Bearer ")) {
-            token = authParam.substring(7);
-        } else if (tokenParam != null) {
-            token = tokenParam;
-        }
-
-        if (token != null) {
-            try {
-                Integer userId = jwtTokenUtil.getUserIdFromToken(token);
-                request.setAttribute("userId", userId);
-            } catch (Exception e) {
-                log.error("token验证失败", e);
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("认证失败");
-                return;
+    public Response<String> pay(@PathVariable Long orderId,
+                                @RequestAttribute("userId") Integer userId) {
+        try {
+            // 1. 验证订单归属
+            Order order = orderService.getOrderById(orderId);
+            if (order == null) {
+                return Response.buildFailure("订单不存在", "404");
             }
-        } else {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
+            if (!order.getUserId().equals(userId)) {
+                return Response.buildFailure("无权操作此订单", "403");
+            }
+
+            // 2. 验证状态
+            if (!"PENDING".equals(order.getStatus())) {
+                return Response.buildFailure("订单状态已更新，请勿重复支付", "400");
+            }
+
+            // 3. 检查过期
+            if (order.getLockExpireTime().before(new Date())) {
+                return Response.buildFailure("订单已过期，无法支付", "400");
+            }
+
+            // 4. [模拟支付成功] 修改状态
+            order.setStatus("PAID");
+            order.setPaymentTime(new Timestamp(System.currentTimeMillis()));
+            // 模拟一个流水号
+            order.setTradeNo("MOCK_" + System.currentTimeMillis());
+
+            orderService.updateOrder(order);
+
+            // 5. (可选) 如果你想测试 RocketMQ 的发货流程，可以在这里发一条消息
+            // PaymentNotifyDTO notify = new PaymentNotifyDTO();
+            // notify.setOutTradeNo(String.valueOf(orderId));
+            // notify.setTotalAmount(order.getTotalAmount());
+            // rocketMQTemplate.convertAndSend("payment-success-topic", notify);
+
+            log.info("模拟支付成功，订单ID: {}", orderId);
+            return Response.buildSuccess("支付成功");
+
+        } catch (Exception e) {
+            log.error("模拟支付失败", e);
+            return Response.buildFailure("系统错误", "500");
         }
-
-        // --- 2. 业务逻辑 ---
-
-        // [修改点] getOrderById 参数已在 Service 接口变更为 Long
-        Order order = orderService.getOrderById(orderId);
-
-        log.info("支付订单信息: ID={}, 状态={}, 创建时间={}", order.getOrderId(), order.getStatus(), order.getCreateTime());
-
-        if (order.getLockExpireTime().before(new Date())) {
-            throw new RuntimeException("订单已过期，请重新下单");
-        }
-
-        AlipayClient alipayClient = new DefaultAlipayClient(
-                GATEWAY_URL,
-                aliPayConfig.getAppId(),
-                aliPayConfig.getAppPrivateKey(),
-                FORMAT,
-                CHARSET,
-                aliPayConfig.getAlipayPublicKey(),
-                SIGN_TYPE);
-
-        String returnUrlWithToken = "http://localhost:8080/api/orders/payment-success?orderId=" + orderId;
-        if (token != null) {
-            returnUrlWithToken += "&token=" + token;
-        }
-
-        AlipayTradePagePayRequest alipayRequest = new AlipayTradePagePayRequest();
-        alipayRequest.setNotifyUrl(aliPayConfig.getNotifyUrl());
-        alipayRequest.setReturnUrl(returnUrlWithToken);
-
-        JSONObject bizContent = new JSONObject();
-
-        // [修改点] 既然使用了雪花算法(Long)，ID本身就是全局唯一的，不需要再拼接时间戳了！
-        // 直接转成字符串传给支付宝
-        bizContent.put("out_trade_no", order.getOrderId().toString());
-
-        bizContent.put("total_amount", order.getTotalAmount());
-        bizContent.put("subject", "Tomato Mall Order #" + orderId);
-        bizContent.put("product_code", "FAST_INSTANT_TRADE_PAY");
-        alipayRequest.setBizContent(bizContent.toString());
-
-        String form = alipayClient.pageExecute(alipayRequest).getBody();
-
-        response.setContentType("text/html;charset=" + CHARSET);
-        response.getWriter().write(form);
-        response.getWriter().flush();
-        response.getWriter().close();
     }
 
     @PostMapping("/notify")

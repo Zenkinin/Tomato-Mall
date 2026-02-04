@@ -32,10 +32,11 @@ export function confirmReceipt(orderId: string) {
   })
 }
 
-// 订单支付
-export function payOrder(orderId: string) {
-  // 返回完整URL，前端会用于跳转
-  return `/api/orders/${orderId}/pay`
+export function payOrder(orderId: string | number) {
+  return request({
+    url: `/api/orders/${orderId}/pay`,
+    method: 'post'
+  })
 }
 
 // 查询订单状态

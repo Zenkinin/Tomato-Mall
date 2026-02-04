@@ -90,6 +90,37 @@ const fetchOrders = async () => {
   }
 }
 
+// 处理支付点击事件
+const handlePay = async (orderId: string) => {
+  try {
+    const res = await payOrder(orderId)
+    
+    // 后端直接返回了 HTML 字符串 (支付宝表单)
+    const formHtml = res.data
+
+    // 创建一个临时的 div 容器
+    const div = document.createElement('div')
+    div.innerHTML = formHtml
+    document.body.appendChild(div)
+
+    // 找到表单并提交
+    const form = div.getElementsByTagName('form')[0]
+    if (form) {
+      // 设置 target="_blank" 可以在新窗口打开支付页（防拦截建议同页打开）
+      // form.setAttribute('target', '_blank') 
+      form.submit()
+      
+      // 清理 DOM
+      document.body.removeChild(div)
+    } else {
+      ElMessage.error('支付跳转失败，未获取到表单')
+    }
+  } catch (error) {
+    console.error('支付请求失败', error)
+    // 这里的 error 可能是 401 或其他错误
+  }
+}
+
 // 取消订单
 const handleCancelOrder = async (orderId: string | number) => {
   try {
@@ -114,140 +145,26 @@ const handleCancelOrder = async (orderId: string | number) => {
   }
 }
 
-// 去支付 - 处理HTML或JSON响应
-const goToPay = async (orderId: string | number) => {
+// [新增] 模拟支付处理函数
+const handleMockPay = async (orderId: string | number) => {
   try {
-    // 显示加载中
-    ElMessage.info('正在准备支付页面...')
+    loading.value = true
+    const res = await payOrder(orderId)
     
-    // 确保有支付窗口
-    const payWindow = window.open('about:blank', '_blank')
-    if (!payWindow) {
-      ElMessage.warning('浏览器阻止了弹出窗口，请允许弹出窗口后重试')
-      return
-    }
-    
-    // 获取支付信息
-    console.log('正在请求支付链接:', `/api/orders/${orderId}/generate-pay-url`)
-    const response = await fetch(`/api/orders/${orderId}/generate-pay-url`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${sessionStorage.getItem('token')}`
-      }
-    })
-    
-    console.log('支付API响应状态:', response.status, response.statusText)
-    const contentType = response.headers.get("content-type")
-    console.log('响应内容类型:', contentType)
-    
-    if (!response.ok) {
-      // 错误处理
-      payWindow.close()
-      ElMessage.error(`支付请求失败: ${response.status} ${response.statusText}`)
-      return
-    }
-    
-    if (contentType && contentType.includes("application/json")) {
-      // 处理JSON响应
-      const result = await response.json()
-      console.log('支付API返回数据:', result)
-      
-      if (result.data && result.data.payUrl) {
-        console.log('支付链接:', result.data.payUrl)
-        // 增加延时确保窗口完全准备好
-        setTimeout(() => {
-          payWindow.location.href = result.data.payUrl
-        }, 100)
-        ElMessage.success('正在跳转到支付页面')
-      } else {
-        payWindow.close()
-        ElMessage.error('支付链接无效')
-        console.error('无效的支付数据:', result)
-      }
+    if (res.data.code == 200) {
+      ElMessage.success('支付成功！')
+      // 支付成功后，重新获取订单列表，状态会自动变为 PAID
+      await fetchOrders()
     } else {
-      // 处理HTML响应
-      const htmlContent = await response.text()
-      console.log('HTML内容前100个字符:', htmlContent.substring(0, 100))
-      
-      payWindow.document.open()
-      payWindow.document.write(htmlContent)
-      payWindow.document.close()
-      
-      // 检查HTML内容是否包含支付表单
-      if (htmlContent.includes('form') && htmlContent.includes('submit')) {
-        ElMessage.success('正在准备支付页面')
-      } else {
-        ElMessage.warning('返回的HTML内容可能不包含支付表单')
-      }
+      ElMessage.error(res.data.msg || '支付失败')
     }
   } catch (error) {
-    console.error('支付跳转失败详情:', error)
-    ElMessage.error('支付跳转失败，请稍后重试')
+    console.error('支付请求出错:', error)
+    ElMessage.error('网络错误，请稍后重试')
+  } finally {
+    loading.value = false
   }
 }
-
-// 添加直接表单提交方法
-const goToPayWithForm = (orderId: string | number) => {
-  try {
-    ElMessage.info('正在准备支付页面...')
-    
-    // 获取token并检查
-    const token = sessionStorage.getItem('token')
-    if (!token) {
-      ElMessage.warning('未检测到登录信息，请重新登录')
-      router.push('/login')
-      return
-    }
-    
-    // 方式1: 创建表单并添加authorization字段
-    const form = document.createElement('form')
-    form.method = 'POST'
-    form.action = `http://localhost:8080/api/orders/${orderId}/pay`
-    form.target = '_blank'
-    
-    // 添加authorization字段
-    const authField = document.createElement('input')
-    authField.type = 'hidden'
-    authField.name = 'authorization'
-    authField.value = `Bearer ${token}` // 添加Bearer前缀
-    form.appendChild(authField)
-    
-    // 添加token字段(作为备用)
-    const tokenField = document.createElement('input')
-    tokenField.type = 'hidden' 
-    tokenField.name = 'token'
-    tokenField.value = token
-    form.appendChild(tokenField)
-    document.body.appendChild(form)
-    form.submit()
-    document.body.removeChild(form)
-        // 直接显示支付确认弹窗
-        setTimeout(() => {
-      ElMessageBox.confirm(
-        '请在新窗口中完成支付。支付完成后点击"已完成支付"刷新订单状态。',
-        '支付确认',
-        {
-          confirmButtonText: '已完成支付',
-          cancelButtonText: '稍后支付',
-          type: 'info',
-          center: true
-        }
-      ).then(() => {
-        // 用户点击"已完成支付"
-        ElMessage.info('正在刷新订单状态...')
-        checkAllPendingOrders() // 刷新订单列表
-      }).catch(() => {
-        // 用户点击"稍后支付"
-        ElMessage.info('您可以稍后在订单页面点击"去支付"按钮继续支付')
-        checkAllPendingOrders() // 刷新订单列表
-      })
-    }, 1000) // 短暂延迟确保支付页面已打开
-  } catch (error) {
-    console.error('支付跳转失败:', error)
-    ElMessage.error('支付跳转失败，请稍后重试')
-  }
-}
-
 
 // 确认收货
 const handleConfirmReceipt = async (orderId: string | number) => {
@@ -510,7 +427,7 @@ onBeforeUnmount(() => {
                       刷新状态
                     </el-button>
                   </el-tooltip>
-                  <el-button type="primary" size="small" @click="goToPayWithForm(order.orderId)">去支付</el-button>
+                  <el-button type="primary" size="small" @click="handleMockPay(order.orderId)">去支付</el-button>
                 </template>
                 
                 <!-- 其他状态保持不变 -->
